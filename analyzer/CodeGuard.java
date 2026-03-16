@@ -487,9 +487,9 @@ public class CodeGuard {
         System.out.println("Found " + javaFiles.size() + " Java file(s)\n");
 
         Map<String, List<Finding>> allFindings = new HashMap<>();
-        int totalIssues = 0;
-        int totalHigh = 0;
-        int totalMedium = 0;
+        int totalFindings = 0;
+        Set<String> uniqueHighIssues = new HashSet<>();
+        Set<String> uniqueMediumIssues = new HashSet<>();
 
         for (File file : javaFiles) {
             List<Finding> findings = analyzeFile(file);
@@ -498,13 +498,13 @@ public class CodeGuard {
                     enhanceFindingsWithAI(findings, file);
                 }
                 allFindings.put(file.getPath(), findings);
-                totalIssues += findings.size();
+                totalFindings += findings.size();
 
                 for (Finding f : findings) {
                     if (f.severity.equals("HIGH")) {
-                        totalHigh++;
+                        uniqueHighIssues.add(f.description);
                     } else {
-                        totalMedium++;
+                        uniqueMediumIssues.add(f.description);
                     }
                 }
             }
@@ -512,8 +512,11 @@ public class CodeGuard {
 
         // Print summary
         System.out.println(BOLD + "=".repeat(100) + RESET);
-        System.out.println(BOLD + "SUMMARY: " + totalIssues + " issue(s) across " + allFindings.size() + " file(s)" + RESET);
-        System.out.println(BOLD + "  " + RED + totalHigh + " HIGH" + RESET + BOLD + " | " + YELLOW + totalMedium + " MEDIUM" + RESET);
+        System.out.println(BOLD + "SUMMARY: " + totalFindings + " finding(s) across " +
+                          (uniqueHighIssues.size() + uniqueMediumIssues.size()) + " issue type(s) in " +
+                          allFindings.size() + " file(s)" + RESET);
+        System.out.println(BOLD + "  " + RED + uniqueHighIssues.size() + " HIGH" + RESET + BOLD + " | " +
+                          YELLOW + uniqueMediumIssues.size() + " MEDIUM" + RESET);
         System.out.println(BOLD + "=".repeat(100) + RESET);
 
         if (allFindings.isEmpty()) {
@@ -532,7 +535,9 @@ public class CodeGuard {
 
         // Final summary
         System.out.println("\n" + BOLD + "=".repeat(100) + RESET);
-        System.out.println(BOLD + "Total: " + totalIssues + " issue(s) in " + allFindings.size() + " file(s)" + RESET);
+        System.out.println(BOLD + "Total: " + totalFindings + " finding(s) across " +
+                          (uniqueHighIssues.size() + uniqueMediumIssues.size()) + " issue type(s) in " +
+                          allFindings.size() + " file(s)" + RESET);
         System.out.println(BOLD + "Tip: Fix HIGH priority issues first!" + RESET);
     }
 
@@ -704,10 +709,17 @@ public class CodeGuard {
         List<Finding> highSeverity = grouped.getOrDefault("HIGH", new ArrayList<>());
         List<Finding> mediumSeverity = grouped.getOrDefault("MEDIUM", new ArrayList<>());
 
+        // Count unique issue types
+        Set<String> uniqueHighIssues = new HashSet<>();
+        Set<String> uniqueMediumIssues = new HashSet<>();
+        for (Finding f : highSeverity) uniqueHighIssues.add(f.description);
+        for (Finding f : mediumSeverity) uniqueMediumIssues.add(f.description);
+
         // Print summary
-        System.out.println(BOLD + "\nSummary: " + findings.size() + " issue(s) - " +
-                          RED + highSeverity.size() + " HIGH" + RESET + BOLD + ", " +
-                          YELLOW + mediumSeverity.size() + " MEDIUM" + RESET);
+        System.out.println(BOLD + "\nSummary: " + findings.size() + " finding(s) across " +
+                          (uniqueHighIssues.size() + uniqueMediumIssues.size()) + " issue type(s) - " +
+                          RED + uniqueHighIssues.size() + " HIGH" + RESET + BOLD + ", " +
+                          YELLOW + uniqueMediumIssues.size() + " MEDIUM" + RESET);
 
         int maxShow = showAll ? Integer.MAX_VALUE : 5; // Show max 5 issues per severity unless --all
 
@@ -721,21 +733,59 @@ public class CodeGuard {
     private static void printSeverityGroup(List<Finding> findings, String title, String color, int maxShow) {
         if (findings.isEmpty()) return;
 
+        // Group findings by description
+        Map<String, List<Finding>> groupedByIssue = new LinkedHashMap<>();
+        for (Finding f : findings) {
+            groupedByIssue.computeIfAbsent(f.description, k -> new ArrayList<>()).add(f);
+        }
+
         System.out.println("\n" + color + BOLD + title + RESET);
-        System.out.println("  " + BOLD + "LINE | ISSUE                                          | FIX" + RESET);
         System.out.println("  " + "─".repeat(130));
 
         int shown = 0;
-        for (Finding f : findings) {
+        for (Map.Entry<String, List<Finding>> entry : groupedByIssue.entrySet()) {
             if (shown >= maxShow) break;
-            System.out.println("  " + BOLD + String.format("%-4s", "L" + f.lineNumber) + RESET +
-                             " | " + String.format("%-46s", f.description) +
-                             " | " + GREEN + f.suggestion + RESET);
+
+            String issueDesc = entry.getKey();
+            List<Finding> issueFindings = entry.getValue();
+
+            // Collect all line numbers for this issue
+            List<Integer> lineNumbers = new ArrayList<>();
+            for (Finding f : issueFindings) {
+                lineNumbers.add(f.lineNumber);
+            }
+
+            // Sort line numbers
+            Collections.sort(lineNumbers);
+
+            // Format line numbers
+            String linesStr;
+            if (lineNumbers.size() == 1) {
+                linesStr = "Line " + lineNumbers.get(0);
+            } else if (lineNumbers.size() <= 6) {
+                linesStr = "Lines: " + lineNumbers.stream()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(", "));
+            } else {
+                // Show first 5, then "and X more"
+                linesStr = "Lines: " + lineNumbers.subList(0, 5).stream()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(", ")) +
+                    " ...and " + (lineNumbers.size() - 5) + " more";
+            }
+
+            String occurrences = lineNumbers.size() > 1 ? " (" + lineNumbers.size() + " occurrences)" : "";
+
+            // Print grouped issue
+            System.out.println("\n  " + BOLD + issueDesc + RESET);
+            System.out.println("    " + color + linesStr + occurrences + RESET);
+            System.out.println("    " + BOLD + "Fix: " + RESET + GREEN + issueFindings.get(0).suggestion + RESET);
+
             shown++;
         }
 
-        if (findings.size() > maxShow) {
-            System.out.println("  " + BOLD + "... and " + (findings.size() - maxShow) + " more" + RESET);
+        if (groupedByIssue.size() > maxShow) {
+            System.out.println("\n  " + BOLD + "... and " + (groupedByIssue.size() - maxShow) + " more issue types" + RESET);
         }
     }
 
