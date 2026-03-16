@@ -4,9 +4,6 @@
 # Build directory
 build/
 
-# JAR files
-*.jar
-
 # IDE files
 .idea/
 .vscode/
